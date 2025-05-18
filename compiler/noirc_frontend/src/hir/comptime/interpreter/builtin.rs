@@ -1358,55 +1358,77 @@ fn unresolved_type_as_slice(
 }
 
 // fn is_bool(self) -> bool
-fn unresolved_type_is_bool(
+pub(crate) fn unresolved_type_is_bool(
     interner: &NodeInterner,
     arguments: Vec<(Value, Location)>,
     location: Location,
 ) -> IResult<Value> {
     let self_argument = check_one_argument(arguments, location)?;
+    
+    // Get the unresolved type data
     let typ = get_unresolved_type(interner, self_argument)?;
-
-    // TODO: we should resolve the type here instead of just checking the name
-    // See https://github.com/noir-lang/noir/issues/8505
-    let UnresolvedTypeData::Named(path, generics, _) = typ else {
-        return Ok(Value::Bool(false));
-    };
-    if !generics.is_empty() {
-        return Ok(Value::Bool(false));
+    
+    // First try the simple case: is it a primitive bool by name?
+    match &typ {
+        UnresolvedTypeData::Named(path, generics, _) => {
+            if !generics.is_empty() {
+                return Ok(Value::Bool(false));
+            }
+            
+            if let Some(ident) = path.as_ident() {
+                if let Some(primitive_type) = PrimitiveType::lookup_by_name(ident.as_str()) {
+                    return Ok(Value::Bool(primitive_type == PrimitiveType::Bool));
+                }
+            }
+        }
+        _ => {}
     }
-    let Some(ident) = path.as_ident() else {
-        return Ok(Value::Bool(false));
-    };
-    let Some(primitive_type) = PrimitiveType::lookup_by_name(ident.as_str()) else {
-        return Ok(Value::Bool(false));
-    };
-    Ok(Value::Bool(primitive_type == PrimitiveType::Bool))
+    
+    // If that didn't work, try to resolve the type fully
+    if let Some(resolved_type) = try_resolve_type(interner, &typ) {
+        // Check if the resolved type is a bool
+        return Ok(Value::Bool(matches!(resolved_type, Type::Bool)));
+    }
+    
+    // If all else fails, it's not a bool
+    Ok(Value::Bool(false))
 }
 
 // fn is_field(self) -> bool
-fn unresolved_type_is_field(
+pub(crate) fn unresolved_type_is_field(
     interner: &NodeInterner,
     arguments: Vec<(Value, Location)>,
     location: Location,
 ) -> IResult<Value> {
     let self_argument = check_one_argument(arguments, location)?;
+    
+    // Get the unresolved type data
     let typ = get_unresolved_type(interner, self_argument)?;
-
-    // TODO: we should resolve the type here instead of just checking the name
-    // See https://github.com/noir-lang/noir/issues/8505
-    let UnresolvedTypeData::Named(path, generics, _) = typ else {
-        return Ok(Value::Bool(false));
-    };
-    if !generics.is_empty() {
-        return Ok(Value::Bool(false));
+    
+    // First try the simple case: is it a primitive Field by name?
+    match &typ {
+        UnresolvedTypeData::Named(path, generics, _) => {
+            if !generics.is_empty() {
+                return Ok(Value::Bool(false));
+            }
+            
+            if let Some(ident) = path.as_ident() {
+                if let Some(primitive_type) = PrimitiveType::lookup_by_name(ident.as_str()) {
+                    return Ok(Value::Bool(primitive_type == PrimitiveType::Field));
+                }
+            }
+        }
+        _ => {}
     }
-    let Some(ident) = path.as_ident() else {
-        return Ok(Value::Bool(false));
-    };
-    let Some(primitive_type) = PrimitiveType::lookup_by_name(ident.as_str()) else {
-        return Ok(Value::Bool(false));
-    };
-    Ok(Value::Bool(primitive_type == PrimitiveType::Field))
+    
+    // If that didn't work, try to resolve the type fully
+    if let Some(resolved_type) = try_resolve_type(interner, &typ) {
+        // Check if the resolved type is a Field
+        return Ok(Value::Bool(matches!(resolved_type, Type::FieldElement)));
+    }
+    
+    // If all else fails, it's not a Field
+    Ok(Value::Bool(false))
 }
 
 // fn is_unit(self) -> bool
@@ -1417,7 +1439,18 @@ fn unresolved_type_is_unit(
 ) -> IResult<Value> {
     let self_argument = check_one_argument(arguments, location)?;
     let typ = get_unresolved_type(interner, self_argument)?;
-    Ok(Value::Bool(matches!(typ, UnresolvedTypeData::Unit)))
+    
+    // First check for exact Unit match
+    if matches!(typ, UnresolvedTypeData::Unit) {
+        return Ok(Value::Bool(true));
+    }
+    
+    // Then try to resolve the type
+    if let Some(resolved_type) = try_resolve_type(interner, &typ) {
+        return Ok(Value::Bool(matches!(resolved_type, Type::Unit)));
+    }
+    
+    Ok(Value::Bool(false))
 }
 
 // Helper function for implementing the `unresolved_type_as_...` functions.
@@ -3138,4 +3171,38 @@ fn field_less_than(arguments: Vec<(Value, Location)>, location: Location) -> IRe
     let rhs = get_field(rhs)?;
 
     Ok(Value::Bool(lhs < rhs))
+}
+
+// Helper function to try to resolve an unresolved type to a Type
+// This is left as a stub - full implementation would require:
+// 1. Access to the current function's namespace/scope
+// 2. Logic to find type aliases and resolve them
+// 3. Handling of generic type substitutions
+fn try_resolve_type(_interner: &NodeInterner, typ: &UnresolvedTypeData) -> Option<Type> {
+    match typ {
+        UnresolvedTypeData::Named(path, generics, _) => {
+            // If it has generics, it's not a simple primitive type
+            if !generics.is_empty() {
+                return None;
+            }
+            
+            // First check if it's a primitive type by name
+            if let Some(ident) = path.as_ident() {
+                if let Some(primitive_type) = PrimitiveType::lookup_by_name(ident.as_str()) {
+                    return Some(primitive_type.to_type());
+                }
+            }
+            
+            // At this point, we'd try to resolve type aliases, but that requires
+            // more context from the interpreter that we don't have
+            None
+        }
+        UnresolvedTypeData::Resolved(_quoted_type_id) => {
+            // If we have a quoted type ID, we could try to resolve it if we had
+            // the full interpreter context
+            None
+        }
+        UnresolvedTypeData::Unit => Some(Type::Unit),
+        _ => None,
+    }
 }
